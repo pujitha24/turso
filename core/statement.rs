@@ -250,6 +250,11 @@ fn infer_expression_primitive(
             ),
         },
         Expr::RowId { .. } => Some("INTEGER"),
+        Expr::FunctionCall { name, .. } | Expr::FunctionCallStar { name, .. }
+            if name.as_str().eq_ignore_ascii_case("count") =>
+        {
+            Some("BIGINT")
+        }
         // CAST, column references, and anything else: defer to the affinity
         // machinery, which handles these shapes correctly.
         _ => affinity_to_primitive(translate::expr::get_expr_affinity(
@@ -1272,7 +1277,7 @@ impl Statement {
     /// - `Ok(Some(info))` otherwise. For a table-column reference, `info`
     ///   carries the declared name verbatim; for an expression, `declared_name`
     ///   is the inferred-affinity primitive (`"INTEGER"`, `"TEXT"`, `"REAL"`,
-    ///   or `"NUMERIC"`) and `kind` is `Builtin`.
+    ///   `"NUMERIC"`, or `"BIGINT"` for `count`) and `kind` is `Builtin`.
     ///
     /// This is a Turso-specific API; it has no `sqlite3_*` counterpart. The
     /// returned struct is `#[non_exhaustive]` so additional metadata can be

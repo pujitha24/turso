@@ -805,6 +805,27 @@ mod tests {
     }
 
     #[test]
+    fn test_count_column_is_int8() {
+        let (_io, db) = turso_pg::open_database(
+            ":memory:",
+            None,
+            turso_pg::OpenFlags::default(),
+            turso_pg::DatabaseOpts::new(),
+        )
+        .unwrap();
+        let conn = Connection::connect(&db).unwrap();
+        for sql in [
+            "SELECT COUNT(*) FROM pg_collation",
+            "SELECT count(1) FROM pg_collation",
+            "SELECT COUNT(DISTINCT collname) FROM pg_collation",
+        ] {
+            let stmt = conn.prepare(sql).unwrap();
+            let fields = build_field_info(&stmt, &Format::UnifiedText);
+            assert_eq!(*fields[0].datatype(), Type::INT8, "{sql}");
+        }
+    }
+
+    #[test]
     fn test_set_transaction_is_non_query() {
         assert!(is_pg_non_query(
             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
