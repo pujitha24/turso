@@ -740,12 +740,7 @@ impl IoWorker {
         // Create HTTPS-capable Hyper client.
         let mut http_connector = HttpConnector::new();
         http_connector.enforce_http(false);
-        let https: HttpsConnector<HttpConnector> = HttpsConnector::<HttpConnector>::builder()
-            .with_native_roots()
-            .expect("failed to load native root CA certificates")
-            .https_or_http()
-            .enable_http1()
-            .build();
+        let https = build_https_connector(http_connector);
         let client: Client<HttpsConnector<HttpConnector>, ChunkedBody> =
             Client::builder(TokioExecutor::new()).build::<_, ChunkedBody>(https);
 
@@ -973,6 +968,26 @@ impl IoWorker {
     }
 }
 
+// Use the system root certificates. Some platforms (for example Android) have
+// none that rustls-native-certs can find, so fall back to the bundled Mozilla roots
+// instead of panicking and leaving sync futures waiting forever.
+fn build_https_connector(http_connector: HttpConnector) -> HttpsConnector<HttpConnector> {
+    let builder = HttpsConnector::<HttpConnector>::builder();
+    let builder = match builder.with_native_roots() {
+        Ok(builder) => builder,
+        Err(err) => {
+            tracing::warn!(
+                "failed to load native root CA certificates, using bundled roots: {err}"
+            );
+            HttpsConnector::<HttpConnector>::builder().with_webpki_roots()
+        }
+    };
+    builder
+        .https_or_http()
+        .enable_http1()
+        .wrap_connector(http_connector)
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::{anyhow, Context, Result};
@@ -990,6 +1005,24 @@ mod tests {
 
     use crate::sync::PartialSyncOpts;
     use crate::{Rows, Value};
+
+    #[test]
+    fn https_connector_falls_back_when_no_native_roots_are_found() {
+        let empty_dir = TempDir::new().unwrap();
+        let empty_file = empty_dir.path().join("empty.pem");
+        std::fs::write(&empty_file, "").unwrap();
+        // SAFETY: no other test in this binary reads these variables.
+        unsafe {
+            env::set_var("SSL_CERT_FILE", &empty_file);
+            env::set_var("SSL_CERT_DIR", empty_dir.path());
+        }
+        assert!(hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .is_err());
+
+        // Used to panic with "failed to load native root CA certificates".
+        super::build_https_connector(hyper_util::client::legacy::connect::HttpConnector::new());
+    }
 
     const ADMIN_URL: &str = "http://localhost:8081";
     const USER_URL: &str = "http://localhost:8080";
