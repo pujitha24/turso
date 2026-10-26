@@ -193,6 +193,29 @@ fn test_txn_error_doesnt_rollback_txn(tmp_db: TempDatabase) -> Result<()> {
     Ok(())
 }
 
+#[turso_macros::test(init_sql = "create table t (x);")]
+fn test_runtime_error_in_select_keeps_txn_open(tmp_db: TempDatabase) -> Result<()> {
+    let conn = tmp_db.connect_limbo();
+
+    conn.execute("begin")?;
+    conn.execute("insert into t values (1)")?;
+    assert!(matches!(
+        conn.execute("select abs(-9223372036854775807 - 1)"),
+        Err(LimboError::IntegerOverflow)
+    ));
+    assert!(matches!(
+        conn.execute("insert into t values (abs(-9223372036854775807 - 1))"),
+        Err(LimboError::IntegerOverflow)
+    ));
+    assert!(!conn.get_auto_commit());
+    conn.execute("insert into t values (2)")?;
+    conn.execute("commit")?;
+    let rows: Vec<(i64,)> = conn.exec_rows("select x from t order by x");
+    assert_eq!(rows, vec![(1,), (2,)]);
+
+    Ok(())
+}
+
 #[turso_macros::test]
 /// Connection 2 should see the initial data (table 'test' in schema + 2 rows). Regression test for #2997
 /// It should then see another created table 'test2' in schema, as well.

@@ -3861,8 +3861,17 @@ impl Program {
                         }
                     }
                     TxnCleanup::None => {
+                        // Like SQLite, a run-time SQL error (overflow, divide by zero)
+                        // only fails the statement. The transaction stays open.
+                        // Other error kinds still roll back (not yet narrowed).
+                        let is_sql_runtime_error = matches!(
+                            err,
+                            Some(LimboError::IntegerOverflow | LimboError::DivisionByZero)
+                        );
                         if can_autocommit_now
-                            || (!self.connection.get_auto_commit() && err.is_some())
+                            || (!self.connection.get_auto_commit()
+                                && err.is_some()
+                                && !is_sql_runtime_error)
                         {
                             self.rollback_current_txn(pager);
                         }
