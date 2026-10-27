@@ -3235,6 +3235,9 @@ async fn send_push_batch<IO: SyncEngineIo, Ctx>(
         ));
     }
     sql_over_http_requests.push(step("COMMIT".to_string(), Vec::new()));
+    stop_batch_after_failed_step(&mut sql_over_http_requests, &add_column_step_indices);
+    // runs only if the transaction is still open, i.e. a step failed
+    sql_over_http_requests.push(step("ROLLBACK".to_string(), Vec::new()));
 
     tracing::debug!("hrana request: {:?}", sql_over_http_requests);
     let replay_hrana_request = server_proto::PipelineReqBody {
@@ -3250,6 +3253,33 @@ async fn send_push_batch<IO: SyncEngineIo, Ctx>(
 
     let _ = sql_execute_http(ctx, replay_hrana_request, &add_column_step_indices).await?;
     Ok((rows_changed, last_change_id.unwrap_or(0)))
+}
+
+/// Make every step run only if the step before it succeeded, so one failed
+/// step stops the rest of the batch (including COMMIT). Steps in
+/// `ignored_step_indices` may fail without stopping the batch, so later steps
+/// look at the last step that is not ignored.
+fn stop_batch_after_failed_step(
+    steps: &mut [BatchStep],
+    ignored_step_indices: &std::collections::HashSet<usize>,
+) {
+    let mut required_step: Option<usize> = None;
+    for (i, step) in steps.iter_mut().enumerate() {
+        if let Some(required) = required_step {
+            let not_autocommit = BatchCond::Not {
+                cond: Box::new(BatchCond::IsAutocommit {}),
+            };
+            let previous_ok = BatchCond::Ok {
+                step: required as u32,
+            };
+            step.condition = Some(BatchCond::And(server_proto::BatchCondList {
+                conds: vec![not_autocommit, previous_ok],
+            }));
+        }
+        if !ignored_step_indices.contains(&i) {
+            required_step = Some(i);
+        }
+    }
 }
 
 pub async fn apply_transformation<IO: SyncEngineIo, Ctx>(
@@ -5954,6 +5984,58 @@ mod tests {
             rewritten.contains("IF NOT EXISTS"),
             "unexpected rewrite: {rewritten}"
         );
+    }
+
+    use crate::server_proto::{BatchCond, BatchStep, Stmt};
+
+    fn test_step(sql: &str) -> BatchStep {
+        BatchStep {
+            stmt: Stmt {
+                sql: Some(sql.to_string()),
+                sql_id: None,
+                args: Vec::new(),
+                named_args: Vec::new(),
+                want_rows: Some(false),
+                replication_index: None,
+            },
+            condition: None,
+        }
+    }
+
+    fn required_step(step: &BatchStep) -> Option<u32> {
+        let Some(BatchCond::And(list)) = &step.condition else {
+            return None;
+        };
+        list.conds.iter().find_map(|c| match c {
+            BatchCond::Ok { step } => Some(*step),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn push_batch_steps_each_need_the_previous_step_to_succeed() {
+        let mut steps: Vec<_> = ["BEGIN IMMEDIATE", "INSERT", "DROP", "COMMIT"]
+            .into_iter()
+            .map(test_step)
+            .collect();
+        super::stop_batch_after_failed_step(&mut steps, &Default::default());
+        assert!(steps[0].condition.is_none());
+        assert_eq!(required_step(&steps[1]), Some(0));
+        assert_eq!(required_step(&steps[2]), Some(1));
+        assert_eq!(required_step(&steps[3]), Some(2));
+    }
+
+    #[test]
+    fn push_batch_steps_skip_over_steps_that_may_fail() {
+        let mut steps: Vec<_> = ["BEGIN IMMEDIATE", "ALTER", "INSERT", "COMMIT"]
+            .into_iter()
+            .map(test_step)
+            .collect();
+        let ignored = std::collections::HashSet::from([1]);
+        super::stop_batch_after_failed_step(&mut steps, &ignored);
+        assert_eq!(required_step(&steps[1]), Some(0));
+        assert_eq!(required_step(&steps[2]), Some(0));
+        assert_eq!(required_step(&steps[3]), Some(2));
     }
 
     #[test]
