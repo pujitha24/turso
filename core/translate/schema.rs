@@ -614,7 +614,8 @@ fn resolve_column_type(col: &ast::ColumnDefinition, resolver: &Resolver) -> Resu
 fn resolve_type_name(type_name: &str, resolver: &Resolver) -> Result<CheckExprType> {
     let name_bytes = type_name.as_bytes();
     let result = turso_macros::match_ignore_ascii_case!(match name_bytes {
-        b"INT" | b"INTEGER" => Some(CheckExprType::Integer),
+        // boolean is stored and decoded as integer 0/1, and `true`/`false` are integers here
+        b"INT" | b"INTEGER" | b"BOOLEAN" | b"BOOL" => Some(CheckExprType::Integer),
         b"REAL" | b"FLOAT" | b"DOUBLE" => Some(CheckExprType::Real),
         b"TEXT" => Some(CheckExprType::Text),
         b"BLOB" => Some(CheckExprType::Blob),

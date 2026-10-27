@@ -223,6 +223,49 @@ expect {
     1|2|3
 }
 
+test table-check-boolean-column-compared-with-literal {
+    CREATE TABLE t (b boolean CHECK (b = true));
+    INSERT INTO t VALUES (true);
+    SELECT count(*) FROM t;
+}
+expect {
+    1
+}
+
+test table-check-boolean-column-not-equal-literal {
+    CREATE TABLE t (b boolean CHECK (b <> false));
+    INSERT INTO t VALUES (true);
+    SELECT count(*) FROM t;
+}
+expect {
+    1
+}
+
+test table-check-boolean-column-in-list {
+    CREATE TABLE t (b boolean CHECK (b IN (true)));
+    INSERT INTO t VALUES (true);
+    SELECT count(*) FROM t;
+}
+expect {
+    1
+}
+
+test table-check-boolean-column-compared-with-literal-rejects-false {
+    CREATE TABLE t (b boolean CHECK (b = true));
+    INSERT INTO t VALUES (false);
+}
+@sqlstate 23514
+expect error {}
+
+test table-check-boolean-column-compared-with-cast {
+    CREATE TABLE t (b boolean CHECK (b = true::boolean));
+    INSERT INTO t VALUES (true);
+    SELECT count(*) FROM t;
+}
+expect {
+    1
+}
+
 test table-delete-row-with-numeric-expression-index {
     CREATE TABLE prices (id int PRIMARY KEY, val numeric(10,2));
     CREATE INDEX prices_doubled ON prices ((val * 2));
