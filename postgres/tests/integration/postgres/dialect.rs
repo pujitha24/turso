@@ -1076,6 +1076,34 @@ fn test_postgres_cast_boolean(db: TempDatabase) {
     assert_eq!(*val, 1);
 }
 
+#[turso_macros::test(mvcc)]
+fn test_postgres_cast_text_to_boolean(db: TempDatabase) {
+    let conn = db.connect_postgres();
+
+    let mut rows = conn
+        .query("SELECT 't'::bool, 'TRUE'::bool, 'f'::bool, 'off'::boolean")
+        .unwrap()
+        .unwrap();
+    let StepResult::Row = rows.step().unwrap() else {
+        panic!("expected row");
+    };
+    let row = rows.row().unwrap();
+    let values: Vec<_> = (0..4).map(|i| row.get_value(i).clone()).collect();
+    assert_eq!(
+        values,
+        vec![
+            Value::from_i64(1),
+            Value::from_i64(1),
+            Value::from_i64(0),
+            Value::from_i64(0),
+        ]
+    );
+    drop(rows);
+
+    let mut rows = conn.query("SELECT 'x'::bool").unwrap().unwrap();
+    assert!(rows.step().is_err());
+}
+
 // ==================== FOREIGN KEYS ====================
 
 #[turso_macros::test(mvcc)]
